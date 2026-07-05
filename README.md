@@ -1,6 +1,6 @@
 # PawPal+ — Pet Care Scheduler
 
-A Streamlit app that helps pet owners plan and manage daily care tasks across multiple pets. PawPal+ applies scheduling algorithms — priority sorting, time-conflict detection, and recurring task management — to produce a daily plan that fits within the owner's available time budget.
+A Streamlit app that helps pet owners plan and manage daily care tasks across multiple pets. PawPal+ applies scheduling algorithms such as priority sorting, time-conflict detection, and recurring task management to produce a daily plan that fits within the owner's available time budget.
 
 ---
 
