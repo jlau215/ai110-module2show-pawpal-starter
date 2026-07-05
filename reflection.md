@@ -5,12 +5,16 @@
 **a. Initial design**
 
 - Briefly describe your initial UML design.
+  My initial UML design was to be simple while having 4 different classes. Each class have their own unique information and methods. 
 - What classes did you include, and what responsibilities did you assign to each?
+  I chose to have 4 classes; Owner, Pet, Task, and Scheduler. The Owner class contains information such as id, name, preferences, and available time. They also have methods to add, edit, and remove pets and tasks. The Pet class is in charge of getting assigned tasks that the Owner class manages. The Task class is managed by the Owner. The Scheduler class organizes Tasks.
 
 **b. Design changes**
 
 - Did your design change during implementation?
+  Yes
 - If yes, describe at least one change and why you made it.
+  One change I made was that my Task class was missing pet_id so that task can be assigned to that particular pet.
 
 ---
 
