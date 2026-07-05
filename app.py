@@ -93,37 +93,56 @@ def render_plan_table(plan: list, owner: Owner, conflict_titles: set) -> None:
 # ── Section 1: Owner & Pet setup ──────────────────────────────────────────────
 st.subheader("1. Owner & Pet Setup")
 
-col1, col2 = st.columns(2)
-with col1:
-    owner_name     = st.text_input("Owner name", value="Jordan")
-    available_time = st.number_input("Available time today (min)", min_value=10, max_value=480, value=120)
-with col2:
-    pet_name = st.text_input("Pet name", value="Mochi")
-    species  = st.selectbox("Species", ["Dog", "Cat", "Other"])
-    breed    = st.text_input("Breed", value="Mixed")
+# ── 1a: Owner (create once, update in place) ──────────────────────────────────
+with st.expander("Owner Profile", expanded=st.session_state.owner is None):
+    oc1, oc2 = st.columns(2)
+    with oc1:
+        owner_name     = st.text_input("Owner name", value=st.session_state.owner.name if st.session_state.owner else "Jordan")
+    with oc2:
+        available_time = st.number_input(
+            "Available time today (min)", min_value=10, max_value=480,
+            value=st.session_state.owner.available_time if st.session_state.owner else 120,
+        )
 
-if st.button("Save Owner & Pet"):
-    if st.session_state.owner is not None:
-        st.warning("An owner already exists. Saving again resets all pets and tasks.")
-    owner = Owner(owner_id=1, name=owner_name, available_time=int(available_time))
-    pet = Pet(
-        pet_id   = st.session_state.next_pet_id,
-        pet_name = pet_name,
-        species  = species,
-        breed    = breed,
-        pet_dob  = date(2020, 1, 1),
-    )
-    owner.add_pet(pet)
-    st.session_state.owner         = owner
-    st.session_state.next_pet_id  += 1
-    st.session_state.next_task_id  = 1
-    st.session_state.plan          = []
-    st.session_state.plan_conflicts = []
-    st.success(f"Saved! Owner: **{owner_name}** | Pet: **{pet_name}** ({species})")
+    if st.button("Save Owner"):
+        if st.session_state.owner is None:
+            st.session_state.owner        = Owner(owner_id=1, name=owner_name, available_time=int(available_time))
+            st.session_state.next_task_id = 1
+            st.session_state.plan         = []
+            st.session_state.plan_conflicts = []
+            st.success(f"Owner **{owner_name}** created.")
+        else:
+            # Update name/budget without touching pets or tasks
+            st.session_state.owner.name           = owner_name
+            st.session_state.owner.available_time = int(available_time)
+            st.success(f"Owner updated — name: **{owner_name}**, budget: **{available_time} min**.")
+
+# ── 1b: Add a pet (additive — never resets existing pets/tasks) ───────────────
+if st.session_state.owner:
+    with st.expander("Add a Pet"):
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            pet_name = st.text_input("Pet name", value="Mochi", key="new_pet_name")
+            species  = st.selectbox("Species", ["Dog", "Cat", "Other"], key="new_pet_species")
+        with pc2:
+            breed    = st.text_input("Breed", value="Mixed", key="new_pet_breed")
+            pet_dob  = st.date_input("Date of birth", value=date(2020, 1, 1), key="new_pet_dob")
+
+        if st.button("Add Pet"):
+            pet = Pet(
+                pet_id   = st.session_state.next_pet_id,
+                pet_name = pet_name,
+                species  = species,
+                breed    = breed,
+                pet_dob  = pet_dob,
+            )
+            st.session_state.owner.add_pet(pet)
+            st.session_state.next_pet_id += 1
+            st.success(f"Added **{pet_name}** ({species}, {breed}) to {st.session_state.owner.name}'s profile.")
 
 if st.session_state.owner:
     o = st.session_state.owner
-    pets_str = ", ".join(p.pet_name for p in o.pets)
+    pets_str = ", ".join(p.pet_name for p in o.pets) or "none yet"
     st.caption(f"Active owner: **{o.name}** — Pets: {pets_str} — Budget: {o.available_time} min")
 
 st.divider()
@@ -135,25 +154,29 @@ if st.session_state.owner is None:
     st.info("Save an owner and pet above before adding tasks.")
 else:
     owner = st.session_state.owner
-    pet   = owner.pets[0] if owner.pets else None
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        task_title     = st.text_input("Task title", value="Morning walk")
-        task_type      = st.selectbox("Type", ["walk", "feeding", "meds", "grooming", "enrichment", "appointment"])
-    with col2:
-        duration       = st.number_input("Duration (min)", min_value=1, max_value=240, value=20)
-        priority_label = st.selectbox("Priority", ["Low", "Medium", "High"], index=2)
-        is_required    = st.checkbox("Required (always include in plan)")
-    with col3:
-        task_date_input = st.date_input("Date", value=date.today())
-        task_time_input = st.time_input("Time", value=time(8, 0))
-        frequency       = st.selectbox("Frequency", ["once", "daily", "weekly"])
+    if not owner.pets:
+        st.info("Add at least one pet in Section 1 before adding tasks.")
+    else:
+        pet_options = {p.pet_name: p for p in owner.pets}
 
-    if st.button("Add Task"):
-        if pet is None:
-            st.error("No pet found. Save a pet first.")
-        else:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            task_title        = st.text_input("Task title", value="Morning walk")
+            task_type         = st.selectbox("Type", ["walk", "feeding", "meds", "grooming", "enrichment", "appointment"])
+            selected_pet_name = st.selectbox("For pet", list(pet_options.keys()))
+        with col2:
+            duration       = st.number_input("Duration (min)", min_value=1, max_value=240, value=20)
+            priority_label = st.selectbox("Priority", ["Low", "Medium", "High"], index=2)
+            is_required    = st.checkbox("Required (always include in plan)")
+        with col3:
+            task_date_input = st.date_input("Date", value=date.today())
+            task_time_input = st.time_input("Time", value=time(8, 0))
+            frequency       = st.selectbox("Frequency", ["once", "daily", "weekly"])
+
+        pet = pet_options[selected_pet_name]
+
+        if st.button("Add Task"):
             task = Task(
                 task_id     = st.session_state.next_task_id,
                 pet_id      = pet.pet_id,
