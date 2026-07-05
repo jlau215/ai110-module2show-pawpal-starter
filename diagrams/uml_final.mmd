@@ -1,0 +1,74 @@
+classDiagram
+    class Task {
+        +int task_id
+        +int pet_id
+        +String title
+        +String task_type
+        +String description
+        +int duration
+        +Date task_date
+        +Time task_time
+        +int priority
+        +String frequency
+        +String status
+        +String notes
+        +bool required
+        +mark_complete() void
+        +mark_skipped() void
+    }
+
+    class Pet {
+        +int pet_id
+        +String pet_name
+        +String species
+        +String breed
+        +Date pet_dob
+        +float weight
+        +String medical_notes
+        +List~Task~ tasks
+        +get_age() int
+        +get_tasks(filter_date: Date) List~Task~
+    }
+
+    class Owner {
+        +int owner_id
+        +String name
+        +int available_time
+        +List~String~ preferences
+        +List~Pet~ pets
+        -dict _pet_index
+        -List~Task~ _last_plan
+        +add_pet(pet: Pet) void
+        +edit_pet(pet_id: int, updates: dict) void
+        +get_pet(pet_id: int) Pet
+        +remove_pet(pet_id: int) void
+        +add_task(task: Task) void
+        +edit_task(task_id: int, updates: dict) void
+        +remove_task(task_id: int) void
+        +get_tasks() List~Task~
+        +get_schedule() List~Task~
+    }
+
+    class Scheduler {
+        +Owner owner
+        +Date schedule_date
+        +List~Task~ daily_plan
+        +List~String~ conflicts
+        +get_tasks_for_pet(pet_id: int) List~Task~
+        +get_tasks_for_date(target: Date) List~Task~
+        +prioritize_tasks() List~Task~
+        +sort_by_time(tasks: List~Task~) List~Task~
+        +filter_tasks(tasks, status, pet_name) List~Task~
+        +complete_task(task_id: int) Task
+        +detect_conflicts(tasks: List~Task~) List~String~
+        +generate_plan() List~Task~
+        +expand_recurring(days: int) List~Task~
+        +notify(message: String) void
+        +explain_plan() String
+    }
+
+    Owner "1" *-- "0..*" Pet : owns
+    Pet "1" *-- "0..*" Task : has
+    Owner "1" ..> "0..*" Task : manages via pets
+    Scheduler "1" --> "1" Owner : schedules for
+    Scheduler "1" ..> "0..*" Task : organizes
