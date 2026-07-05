@@ -124,7 +124,7 @@ class Scheduler:
         self.owner = owner
         self.schedule_date = schedule_date
         self.daily_plan: list[Task] = []
-        self.conflicts: list[tuple[Task, Task]] = []
+        self.conflicts: list[str] = []
 
     def get_tasks_for_pet(self, pet_id: int) -> list[Task]:
         """Return all tasks belonging to a single pet."""
@@ -139,17 +139,126 @@ class Scheduler:
         today_tasks = self.get_tasks_for_date(self.schedule_date)
         return sorted(today_tasks, key=lambda t: (-t.priority, t.task_time))
 
-    def detect_conflicts(self, tasks: list[Task]) -> list[tuple[Task, Task]]:
-        """Return pairs of tasks whose scheduled times overlap. (#4)"""
-        sorted_tasks = sorted(tasks, key=lambda t: t.task_time)
-        conflicts = []
-        for i in range(len(sorted_tasks) - 1):
-            a, b = sorted_tasks[i], sorted_tasks[i + 1]
-            a_end_min = a.task_time.hour * 60 + a.task_time.minute + a.duration
-            b_start_min = b.task_time.hour * 60 + b.task_time.minute
-            if a_end_min > b_start_min:
-                conflicts.append((a, b))
-        return conflicts
+    def sort_by_time(self, tasks: Optional[list[Task]] = None) -> list[Task]:
+        """Return tasks sorted chronologically by task_time (ascending).
+
+        If no task list is provided, defaults to all of today's tasks.
+        Returns a new list — the original is not mutated.
+        """
+        source = tasks if tasks is not None else self.get_tasks_for_date(self.schedule_date)
+        return sorted(source, key=lambda t: t.task_time.strftime("%H:%M"))
+
+    def filter_tasks(
+        self,
+        tasks: Optional[list[Task]] = None,
+        status: Optional[str] = None,
+        pet_name: Optional[str] = None,
+    ) -> list[Task]:
+        """Filter tasks by completion status and/or pet name.
+
+        Both filters are applied together (AND) when both are given.
+        If no task list is provided, defaults to all owner tasks.
+        Status values: 'pending' | 'completed' | 'skipped'
+        pet_name match is case-insensitive.
+        """
+        source = tasks if tasks is not None else self.owner.get_tasks()
+        result = source
+        if status is not None:
+            result = [t for t in result if t.status == status]
+        if pet_name is not None:
+            result = [
+                t for t in result
+                if (p := self.owner.get_pet(t.pet_id))
+                and p.pet_name.lower() == pet_name.lower()
+            ]
+        return result
+
+    def complete_task(self, task_id: int) -> Optional["Task"]:
+        """Mark a task complete and auto-schedule its next occurrence.
+
+        For 'daily' tasks: next occurrence is task_date + 1 day.
+        For 'weekly' tasks: next occurrence is task_date + 7 days.
+        'once' tasks are just marked complete — no new instance is created.
+
+        Returns the newly created Task if the task was recurring, else None.
+        """
+        target = next(
+            (t for t in self.owner.get_tasks() if t.task_id == task_id),
+            None,
+        )
+        if target is None or target.status == "completed":
+            return None
+
+        target.mark_complete()
+
+        if target.frequency not in ("daily", "weekly"):
+            return None
+
+        delta = timedelta(days=1) if target.frequency == "daily" else timedelta(weeks=1)
+        next_id = max(t.task_id for t in self.owner.get_tasks()) + 1
+
+        next_task = Task(
+            task_id=next_id,
+            pet_id=target.pet_id,
+            title=target.title,
+            task_type=target.task_type,
+            description=target.description,
+            duration=target.duration,
+            task_date=target.task_date + delta,
+            task_time=target.task_time,
+            priority=target.priority,
+            frequency=target.frequency,
+            required=target.required,
+            notes=target.notes,
+        )
+        self.owner.add_task(next_task)
+        return next_task
+
+    def detect_conflicts(self, tasks: Optional[list[Task]] = None) -> list[str]:
+        """Check every pair of tasks for time overlap and return warning strings.
+
+        Checks ALL pairs — not just adjacent — so no overlap is missed.
+        Two tasks conflict when one starts before the other ends:
+            a_start < b_end  AND  b_start < a_end
+
+        Distinguishes two conflict types:
+          [same pet]   — owner would need to do two things at once for one pet
+          [owner time] — tasks for different pets that overlap in the owner's day
+
+        Returns warning strings instead of raising; the program never crashes.
+        """
+        source = tasks if tasks is not None else self.get_tasks_for_date(self.schedule_date)
+        warnings = []
+
+        for i in range(len(source)):
+            for j in range(i + 1, len(source)):
+                a, b = source[i], source[j]
+                a_start = a.task_time.hour * 60 + a.task_time.minute
+                a_end   = a_start + a.duration
+                b_start = b.task_time.hour * 60 + b.task_time.minute
+                b_end   = b_start + b.duration
+
+                if a_start < b_end and b_start < a_end:
+                    pet_a = self.owner.get_pet(a.pet_id)
+                    pet_b = self.owner.get_pet(b.pet_id)
+                    name_a = pet_a.pet_name if pet_a else f"Pet#{a.pet_id}"
+                    name_b = pet_b.pet_name if pet_b else f"Pet#{b.pet_id}"
+
+                    if a.pet_id == b.pet_id:
+                        warnings.append(
+                            f"WARNING [same pet]   '{a.title}' and '{b.title}' "
+                            f"overlap for {name_a} "
+                            f"({a.task_time.strftime('%H:%M')} vs {b.task_time.strftime('%H:%M')})"
+                        )
+                    else:
+                        warnings.append(
+                            f"WARNING [owner time] '{a.title}' ({name_a}) and "
+                            f"'{b.title}' ({name_b}) overlap "
+                            f"({a.task_time.strftime('%H:%M')} vs {b.task_time.strftime('%H:%M')}) "
+                            f"-- owner cannot do both at once"
+                        )
+
+        return warnings
 
     def generate_plan(self) -> list[Task]:
         """
@@ -236,6 +345,6 @@ class Scheduler:
             f"({required_count} required, {optional_count} optional), "
             f"{total_min} min total.",
         ]
-        for a, b in self.conflicts:
-            lines.append(f"  CONFLICT: '{a.title}' overlaps '{b.title}'")
+        for warning in self.conflicts:
+            lines.append(f"  {warning}")
         return "\n".join(lines)

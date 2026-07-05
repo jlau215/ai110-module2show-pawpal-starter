@@ -23,12 +23,16 @@
 **a. Constraints and priorities**
 
 - What constraints does your scheduler consider (for example: time, priority, preferences)?
+  My scheduler considers time and priority.
 - How did you decide which constraints mattered most?
+  I felt like time and priority is the most important when scheduling tasks. Just like real life, people focus on the most important tasks.
 
 **b. Tradeoffs**
 
 - Describe one tradeoff your scheduler makes.
+  One tradeoff my scheduler makes is the generate_plan function. The tasks are sorted by priority, then is added one by one until there is no more time budget. Time and priority might fight over each other.
 - Why is that tradeoff reasonable for this scenario?
+  The tradeoff is reasonable for this because the code more easy to understand but is not guranteed to maximize on tasks scheduled that are within the time budget.
 
 ---
 
