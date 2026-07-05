@@ -59,6 +59,7 @@ owner.add_task(Task(
     priority=3,
     frequency="daily",
     notes="Hide in treat if she refuses.",
+    required=True,          # meds are never skipped due to budget (#5)
 ))
 
 owner.add_task(Task(
@@ -106,7 +107,7 @@ scheduler = Scheduler(owner=owner, schedule_date=today)
 plan = scheduler.generate_plan()
 
 total_scheduled = sum(t.duration for t in plan)
-date_str = today.strftime("%A, %B %d, %Y")
+remaining_time = owner.available_time - total_scheduled  # (#10)
 
 WIDTH = 62
 print()
@@ -115,7 +116,7 @@ print(f"  PawPal -- Today's Schedule".center(WIDTH))
 print(f"  {today.strftime('%A, %B %d, %Y')}".center(WIDTH))
 print("=" * WIDTH)
 print(f"  Owner : {owner.name}")
-print(f"  Budget: {owner.available_time} min available  |  {total_scheduled} min scheduled")
+print(f"  Budget: {owner.available_time} min available  |  {total_scheduled} min scheduled  |  {remaining_time} min free")
 print("-" * WIDTH)
 print(f"  {'#':<3} {'Time':<7} {'Pet':<8} {'Task':<22} {'Min':>4}  {'Pri':>5}")
 print("-" * WIDTH)
@@ -125,19 +126,28 @@ for i, task in enumerate(plan, start=1):
     pet_name = pet.pet_name if pet else "?"
     time_str = task.task_time.strftime("%H:%M")
     priority_bar = "[" + "#" * task.priority + "." * (3 - task.priority) + "]"
-    print(f"  {i:<3} {time_str:<7} {pet_name:<8} {task.title:<22} {task.duration:>3}m  {priority_bar}")
+    req_marker = "*" if task.required else " "
+    print(f"  {i:<3} {time_str:<7} {pet_name:<8} {task.title:<22} {task.duration:>3}m  {priority_bar}{req_marker}")
 
 print("-" * WIDTH)
-print(f"  Total: {total_scheduled} / {owner.available_time} min used")
+print(f"  Total: {total_scheduled} / {owner.available_time} min used  ({remaining_time} min remaining)")
+
+# Conflict warnings (#4)
+if scheduler.conflicts:
+    print()
+    for a, b in scheduler.conflicts:
+        print(f"  !! CONFLICT: '{a.title}' and '{b.title}' overlap at {b.task_time.strftime('%H:%M')}")
+
 print("=" * WIDTH)
 print()
 
 # ── Per-pet task summary ──────────────────────────────────────────────────────
 
 for pet in owner.pets:
-    print(f"  {pet.pet_name} ({pet.species}, age {pet.get_age()}) -- {len(pet.tasks)} task(s) today")
-    for task in pet.get_tasks():
-        print(f"    > {task.task_time.strftime('%H:%M')}  {task.title:<24} [{task.status}]")
+    print(f"  {pet.pet_name} ({pet.species}, age {pet.get_age()}) -- {len(pet.get_tasks(filter_date=today))} task(s) today")
+    for task in pet.get_tasks(filter_date=today):  # date-filtered (#9)
+        req_tag = " [REQUIRED]" if task.required else ""
+        print(f"    > {task.task_time.strftime('%H:%M')}  {task.title:<24} [{task.status}]{req_tag}")
     if pet.medical_notes:
         print(f"    NOTE: {pet.medical_notes}")
     print()
