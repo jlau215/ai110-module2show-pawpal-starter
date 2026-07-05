@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, field
+from datetime import date, time as Time
 from typing import Optional
 
 
@@ -12,23 +12,25 @@ class Pet:
     pet_dob: date
     weight: float = 0.0
     medical_notes: str = ""
+    tasks: list = field(default_factory=list)
 
     def get_age(self) -> int:
         today = date.today()
         return (today - self.pet_dob).days // 365
 
     def get_tasks(self) -> list:
-        pass
+        return self.tasks
 
 
 @dataclass
 class Task:
     task_id: int
+    pet_id: int             # links task to a specific Pet
     title: str
     task_type: str          # walk | feeding | meds | grooming | enrichment | appointment
     duration: int           # minutes
-    date: str
-    time: str
+    task_date: date
+    task_time: Time
     priority: int
     status: str = "pending" # pending | completed | skipped
     notes: str = ""
@@ -78,18 +80,17 @@ class Owner:
         pass
 
     def get_tasks(self) -> list[Task]:
-        pass
+        return []
 
     def get_schedule(self) -> list[Task]:
-        pass
+        return []
 
 
 class Scheduler:
-    def __init__(self, owner: Owner, date: str):
+    def __init__(self, owner: Owner, schedule_date: date):
         self.owner = owner
-        self.date = date
-        self.tasks: list[Task] = []
-        self.daily_plan: list[Task] = []
+        self.schedule_date = schedule_date  # renamed: was shadowing datetime.date
+        self.daily_plan: list[Task] = []   # removed self.tasks; use owner.tasks as single source
 
     def generate_plan(self) -> list[Task]:
         pass
