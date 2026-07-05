@@ -1,3 +1,5 @@
+import re
+import pandas as pd
 import streamlit as st
 from datetime import date, time
 from pawpal_system import Owner, Pet, Task, Scheduler
@@ -14,6 +16,79 @@ if "next_task_id" not in st.session_state:
     st.session_state.next_task_id = 1
 if "plan" not in st.session_state:
     st.session_state.plan = []
+if "plan_conflicts" not in st.session_state:
+    st.session_state.plan_conflicts = []
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+PRIORITY_MAP    = {"Low": 1, "Medium": 2, "High": 3}
+PRIORITY_LABELS = {1: "🟢 Low", 2: "🟡 Medium", 3: "🔴 High"}
+
+def make_scheduler() -> Scheduler:
+    """Return a fresh Scheduler scoped to today (no side effects)."""
+    return Scheduler(owner=st.session_state.owner, schedule_date=date.today())
+
+def task_rows(tasks: list[Task], owner: Owner) -> list[dict]:
+    """Convert a task list into display-ready row dicts."""
+    rows = []
+    for t in tasks:
+        pet = owner.get_pet(t.pet_id)
+        rows.append({
+            "Time"       : t.task_time.strftime("%H:%M"),
+            "Task"       : t.title,
+            "Type"       : t.task_type,
+            "Pet"        : pet.pet_name if pet else "?",
+            "Min"        : t.duration,
+            "Priority"   : PRIORITY_LABELS.get(t.priority, str(t.priority)),
+            "Required"   : "✅" if t.required else "",
+            "Status"     : t.status,
+        })
+    return rows
+
+def parse_conflict(warning: str) -> dict:
+    """Extract structured fields from a detect_conflicts() warning string."""
+    titles     = re.findall(r"'([^']+)'", warning)
+    time_match = re.search(r"\((\d{2}:\d{2}) vs (\d{2}:\d{2})\)", warning)
+    same_pet   = "[same pet]" in warning
+    out = {
+        "type"   : "same_pet" if same_pet else "owner_time",
+        "title_a": titles[0] if len(titles) > 0 else "?",
+        "title_b": titles[1] if len(titles) > 1 else "?",
+        "time_a" : time_match.group(1) if time_match else "?",
+        "time_b" : time_match.group(2) if time_match else "?",
+    }
+    if same_pet:
+        m = re.search(r"overlap for (\S+)", warning)
+        out["pet"] = m.group(1) if m else "?"
+    else:
+        pets = re.findall(r"'[^']*'\s*\(([^)]+)\)", warning)
+        out["pet_a"] = pets[0] if len(pets) > 0 else "?"
+        out["pet_b"] = pets[1] if len(pets) > 1 else "?"
+    return out
+
+def conflict_suggestion(parsed: dict, plan: list) -> str:
+    """Return a plain-English reschedule hint for a conflict."""
+    task_a = next((t for t in plan if t.title == parsed["title_a"]), None)
+    task_b = next((t for t in plan if t.title == parsed["title_b"]), None)
+    if task_a and task_b:
+        end_min    = task_a.task_time.hour * 60 + task_a.task_time.minute + task_a.duration + 5
+        suggest_h, suggest_m = divmod(end_min, 60)
+        return f"→ Move **{parsed['title_b']}** to {suggest_h:02d}:{suggest_m:02d} or later to clear the overlap."
+    return "→ Reschedule one of these tasks to a different time."
+
+def render_plan_table(plan: list, owner: Owner, conflict_titles: set) -> None:
+    """Render plan as a styled dataframe; conflicting rows highlighted amber."""
+    df = pd.DataFrame(task_rows(plan, owner))
+
+    def highlight_row(row):
+        if row["Task"] in conflict_titles:
+            return ["background-color: #fff3cd; color: #856404"] * len(row)
+        return [""] * len(row)
+
+    st.dataframe(
+        df.style.apply(highlight_row, axis=1),
+        use_container_width=True,
+        hide_index=True,
+    )
 
 # ── Section 1: Owner & Pet setup ──────────────────────────────────────────────
 st.subheader("1. Owner & Pet Setup")
@@ -29,22 +104,22 @@ with col2:
 
 if st.button("Save Owner & Pet"):
     if st.session_state.owner is not None:
-        # Owner already exists — warn instead of silently wiping tasks
-        st.warning("An owner already exists. Saving again will reset all pets and tasks.")
+        st.warning("An owner already exists. Saving again resets all pets and tasks.")
     owner = Owner(owner_id=1, name=owner_name, available_time=int(available_time))
     pet = Pet(
-        pet_id=st.session_state.next_pet_id,
-        pet_name=pet_name,
-        species=species,
-        breed=breed,
-        pet_dob=date(2020, 1, 1),
+        pet_id   = st.session_state.next_pet_id,
+        pet_name = pet_name,
+        species  = species,
+        breed    = breed,
+        pet_dob  = date(2020, 1, 1),
     )
     owner.add_pet(pet)
-    st.session_state.owner        = owner
-    st.session_state.next_pet_id  = st.session_state.next_pet_id + 1
-    st.session_state.next_task_id = 1
-    st.session_state.plan         = []     # clear stale plan when owner resets
-    st.success(f"Saved! Owner: {owner_name} | Pet: {pet_name} ({species})")
+    st.session_state.owner         = owner
+    st.session_state.next_pet_id  += 1
+    st.session_state.next_task_id  = 1
+    st.session_state.plan          = []
+    st.session_state.plan_conflicts = []
+    st.success(f"Saved! Owner: **{owner_name}** | Pet: **{pet_name}** ({species})")
 
 if st.session_state.owner:
     o = st.session_state.owner
@@ -55,8 +130,6 @@ st.divider()
 
 # ── Section 2: Add a task ─────────────────────────────────────────────────────
 st.subheader("2. Add a Task")
-
-PRIORITY_MAP = {"Low": 1, "Medium": 2, "High": 3}
 
 if st.session_state.owner is None:
     st.info("Save an owner and pet above before adding tasks.")
@@ -71,9 +144,11 @@ else:
     with col2:
         duration       = st.number_input("Duration (min)", min_value=1, max_value=240, value=20)
         priority_label = st.selectbox("Priority", ["Low", "Medium", "High"], index=2)
+        is_required    = st.checkbox("Required (always include in plan)")
     with col3:
         task_date_input = st.date_input("Date", value=date.today())
         task_time_input = st.time_input("Time", value=time(8, 0))
+        frequency       = st.selectbox("Frequency", ["once", "daily", "weekly"])
 
     if st.button("Add Task"):
         if pet is None:
@@ -89,29 +164,70 @@ else:
                 task_date   = task_date_input,
                 task_time   = task_time_input,
                 priority    = PRIORITY_MAP[priority_label],
+                frequency   = frequency,
+                required    = is_required,
             )
             owner.add_task(task)
             st.session_state.next_task_id += 1
-            st.success(f"Added: {task_title} ({duration} min, priority {PRIORITY_MAP[priority_label]})")
+            req_note = " (required)" if is_required else ""
+            st.success(f"Added: **{task_title}** — {duration} min, {priority_label} priority{req_note}")
 
+    # ── Sort & Filter controls ────────────────────────────────────────────────
     all_tasks = owner.get_tasks()
     if all_tasks:
-        st.write(f"**{len(all_tasks)} task(s) on record:**")
-        st.table([{
-            "Title"         : t.title,
-            "Type"          : t.task_type,
-            "Date"          : str(t.task_date),
-            "Time"          : t.task_time.strftime("%H:%M"),
-            "Duration (min)": t.duration,
-            "Priority"      : t.priority,
-            "Status"        : t.status,
-        } for t in all_tasks])
+        st.markdown("**View Tasks**")
+        fc1, fc2, fc3 = st.columns(3)
+        with fc1:
+            sort_mode = st.selectbox(
+                "Sort by",
+                ["Time (chronological)", "Priority (high → low)"],
+                key="sort_mode",
+            )
+        with fc2:
+            status_filter = st.selectbox(
+                "Filter by status",
+                ["All", "pending", "completed", "skipped"],
+                key="status_filter",
+            )
+        with fc3:
+            pet_names     = ["All"] + [p.pet_name for p in owner.pets]
+            pet_filter    = st.selectbox("Filter by pet", pet_names, key="pet_filter")
+
+        scheduler = make_scheduler()
+
+        # Apply filters
+        filtered = scheduler.filter_tasks(
+            status   = None if status_filter == "All" else status_filter,
+            pet_name = None if pet_filter    == "All" else pet_filter,
+        )
+
+        # Apply sort
+        if sort_mode == "Time (chronological)":
+            display_tasks = scheduler.sort_by_time(filtered)
+        else:
+            display_tasks = sorted(filtered, key=lambda t: (-t.priority, t.task_time))
+
+        # Summary line
+        total_min = sum(t.duration for t in display_tasks)
+        st.caption(
+            f"Showing **{len(display_tasks)}** of {len(all_tasks)} task(s) — "
+            f"**{total_min} min** total"
+        )
+
+        if display_tasks:
+            st.dataframe(
+                pd.DataFrame(task_rows(display_tasks, owner)),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("No tasks match the current filter.")
     else:
         st.info("No tasks yet. Add one above.")
 
 st.divider()
 
-# ── Section 3: Generate schedule ──────────────────────────────────────────────
+# ── Section 3: Generate Today's Schedule ─────────────────────────────────────
 st.subheader("3. Generate Today's Schedule")
 
 if st.session_state.owner is None:
@@ -120,26 +236,91 @@ else:
     if st.button("Generate Schedule"):
         owner     = st.session_state.owner
         scheduler = Scheduler(owner=owner, schedule_date=date.today())
-        st.session_state.plan = scheduler.generate_plan()  # persisted — survives reruns
+        st.session_state.plan           = scheduler.generate_plan()
+        st.session_state.plan_conflicts = scheduler.conflicts
 
-    # Display from session_state so the table stays visible after any widget interaction
     plan = st.session_state.plan
+
     if plan:
         owner     = st.session_state.owner
         total_min = sum(t.duration for t in plan)
-        st.success(f"{len(plan)} task(s) scheduled — {total_min} / {owner.available_time} min used")
-        rows = []
-        for t in plan:
-            matched_pet = owner.get_pet(t.pet_id)          # safe None check
-            rows.append({
-                "Time"          : t.task_time.strftime("%H:%M"),
-                "Task"          : t.title,
-                "Type"          : t.task_type,
-                "Pet"           : matched_pet.pet_name if matched_pet else "?",
-                "Duration (min)": t.duration,
-                "Priority"      : t.priority,
-                "Status"        : t.status,
-            })
-        st.table(rows)
+        budget    = owner.available_time
+        remaining = budget - total_min
+
+        req_count = sum(1 for t in plan if t.required)
+        opt_count = len(plan) - req_count
+
+        # Plan summary banner
+        st.success(
+            f"**{len(plan)} task(s) scheduled** — "
+            f"{req_count} required, {opt_count} optional | "
+            f"**{total_min} / {budget} min used** ({remaining} min free)"
+        )
+
+        # Conflict warnings with plain-English messages and fix suggestions
+        conflict_titles: set = set()
+        if st.session_state.plan_conflicts:
+            for raw in st.session_state.plan_conflicts:
+                parsed = parse_conflict(raw)
+                conflict_titles.add(parsed["title_a"])
+                conflict_titles.add(parsed["title_b"])
+
+                if parsed["type"] == "same_pet":
+                    msg = (
+                        f"**{parsed['pet']}** has 2 tasks at {parsed['time_a']} — "
+                        f"**{parsed['title_a']}** and **{parsed['title_b']}** overlap."
+                    )
+                else:
+                    msg = (
+                        f"**{parsed['title_a']}** ({parsed['pet_a']}) at {parsed['time_a']} and "
+                        f"**{parsed['title_b']}** ({parsed['pet_b']}) at {parsed['time_b']} overlap — "
+                        f"you can't do both at once."
+                    )
+
+                st.warning(f"⚠️ {msg}")
+                st.caption(conflict_suggestion(parsed, plan))
+        else:
+            st.success("✅ No scheduling conflicts detected.")
+
+        # Plan table — conflicting rows highlighted amber
+        render_plan_table(plan, owner, conflict_titles)
+
     elif st.session_state.owner:
-        st.info("Click 'Generate Schedule' to build today's plan.")
+        st.info("Click **Generate Schedule** to build today's plan.")
+
+st.divider()
+
+# ── Section 4: Mark Task Complete ────────────────────────────────────────────
+st.subheader("4. Mark Task Complete")
+
+if st.session_state.owner is None:
+    st.info("Set up an owner and tasks first.")
+else:
+    owner = st.session_state.owner
+    pending_tasks = [t for t in owner.get_tasks() if t.status == "pending"]
+
+    if not pending_tasks:
+        st.success("🎉 All tasks are already complete or there are no tasks yet.")
+    else:
+        scheduler = make_scheduler()
+
+        task_options = {
+            f"[#{t.task_id}] {t.task_time.strftime('%H:%M')} — {t.title} ({t.task_date})": t.task_id
+            for t in scheduler.sort_by_time(pending_tasks)
+        }
+        selected_label = st.selectbox("Select a pending task to complete", list(task_options.keys()))
+        selected_id    = task_options[selected_label]
+
+        if st.button("Mark Complete"):
+            next_task = scheduler.complete_task(selected_id)
+            st.session_state.plan = []          # stale plan — user should regenerate
+            st.session_state.plan_conflicts = []
+            if next_task:
+                st.success(
+                    f"✅ Task marked complete. Next occurrence auto-scheduled for "
+                    f"**{next_task.task_date.strftime('%A, %B %d')}** at "
+                    f"**{next_task.task_time.strftime('%H:%M')}** (ID #{next_task.task_id})."
+                )
+            else:
+                st.success("✅ Task marked complete.")
+            st.info("Regenerate the schedule in Section 3 to reflect the update.")
